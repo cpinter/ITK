@@ -892,11 +892,15 @@ NrrdImageIO::Write(const void * buffer)
   NrrdIoState * nio = nrrdIoStateNew();
   int           kind[NRRD_DIM_MAX];
   size_t        size[NRRD_DIM_MAX];
-  unsigned int  nrrdDim, baseDim, spaceDim;
+  // nrrdDim, spaceDim, and listDim contain the number of
+  // dimensions, baseDim is a dimension index.
+  unsigned int  nrrdDim, baseDim, spaceDim, listDim;
   double        spaceDir[NRRD_DIM_MAX][NRRD_SPACE_DIM_MAX];
   double        origin[NRRD_DIM_MAX];
 
-  spaceDim = this->GetNumberOfDimensions();
+  spaceDim = 3; // Always three spatial dimensions
+  listDim = this->GetNumberOfDimensions() - spaceDim;
+
   if (this->GetNumberOfComponents() > 1)
   {
     size[0] = this->GetNumberOfComponents();
@@ -939,7 +943,7 @@ NrrdImageIO::Write(const void * buffer)
   {
     baseDim = 0;
   }
-  nrrdDim = baseDim + spaceDim;
+  nrrdDim = baseDim + spaceDim + listDim;
   std::vector<double> spaceDirStd(spaceDim);
   unsigned int        axi;
   for (axi = 0; axi < spaceDim; ++axi)
@@ -952,6 +956,16 @@ NrrdImageIO::Write(const void * buffer)
     for (unsigned int saxi = 0; saxi < spaceDim; ++saxi)
     {
       spaceDir[axi + baseDim][saxi] = spacing * spaceDirStd[saxi];
+    }
+  }
+  // Handle list dimension
+  for (axi = spaceDim; axi < spaceDim + listDim; ++axi)
+  {
+    size[axi + baseDim] = this->GetDimensions(axi);
+    kind[axi + baseDim] = nrrdKindList;
+    for (unsigned int saxi = 0; saxi < spaceDim; ++saxi)
+    {
+      spaceDir[axi + baseDim][saxi] = AIR_NAN;
     }
   }
   if (nrrdWrap_nva(nrrd, const_cast<void *>(buffer), this->ITKToNrrdComponentType(m_ComponentType), nrrdDim, size) ||
