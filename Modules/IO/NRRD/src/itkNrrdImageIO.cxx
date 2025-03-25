@@ -360,11 +360,35 @@ NrrdImageIO::ReadImageInformation()
       this->SetPixelType(IOPixelEnum::SCALAR);
       this->SetNumberOfComponents(1);
     }
-    else if (1 == rangeAxisNum)
+    else
     {
+      // In case of multiple range axes, only handle range axes that are not "list" kind.
+      // List axes can be read in the image normally.
+      int rangeAxisIndex{-1};
+      if (1 == rangeAxisNum)
+      {
+        rangeAxisIndex = rangeAxisIdx[0];
+      }
+      else
+      {
+        for (unsigned int axInd = 0; axInd < rangeAxisNum; ++axInd)
+        {
+          if (nrrd->axis[rangeAxisIdx[axInd]].kind != nrrdKindList)
+          {
+            rangeAxisIndex = rangeAxisIdx[axInd];
+            break; // Only one range axis allowed
+          }
+        }
+      }
+      if (rangeAxisIndex < 0)
+      {
+        itkExceptionMacro("ReadImageInformation: nrrd has " << rangeAxisNum
+                                                            << " dependent axis (not 1); not currently handled");
+      }
+
       this->SetNumberOfDimensions(nrrd->dim - 1);
-      int    kind = nrrd->axis[rangeAxisIdx[0]].kind;
-      size_t size = nrrd->axis[rangeAxisIdx[0]].size;
+      int    kind = nrrd->axis[rangeAxisIndex].kind;
+      size_t size = nrrd->axis[rangeAxisIndex].size;
       // NOTE: it is the NRRD readers responsibility to make sure that
       // the size (#of components) associated with a specific kind is
       // matches the actual size of the axis.
@@ -441,11 +465,6 @@ NrrdImageIO::ReadImageInformation()
         default:
           itkExceptionMacro("ReadImageInformation: nrrdKind " << kind << " not known!");
       }
-    }
-    else
-    {
-      itkExceptionMacro("ReadImageInformation: nrrd has " << rangeAxisNum
-                                                          << " dependent axis (not 1); not currently handled");
     }
 
     double              spacing;
@@ -779,22 +798,40 @@ NrrdImageIO::Read(void * buffer)
   unsigned int rangeAxisNum, rangeAxisIdx[NRRD_DIM_MAX];
   rangeAxisNum = nrrdRangeAxesGet(nrrd, rangeAxisIdx);
 
-  if (rangeAxisNum > 1)
+  // In case of multiple range axes, only handle range axes that are not "list" kind.
+  // List axes can be read in the image normally.
+  int rangeAxisIndex{-1};
+  if (1 == rangeAxisNum)
   {
-    itkExceptionMacro("Read: handling more than one non-scalar axis "
-                      "not currently handled");
+    rangeAxisIndex = rangeAxisIdx[0];
   }
-  if (1 == rangeAxisNum && 0 != rangeAxisIdx[0])
+  else
+  {
+    for (unsigned int axInd = 0; axInd < rangeAxisNum; ++axInd)
+    {
+      if (nrrd->axis[rangeAxisIdx[axInd]].kind != nrrdKindList)
+      {
+        rangeAxisIndex = rangeAxisIdx[axInd];
+        break; // Only one range axis allowed
+      }
+    }
+  }
+
+  if (rangeAxisIndex < 0)
+  {
+    itkExceptionMacro("Read: handling more than one non-scalar axis not currently handled");
+  }
+  if (1 == rangeAxisNum && 0 != rangeAxisIndex)
   {
     // the range (dependent variable) is not on the fastest axis,
     // so we have to permute axes to put it there, since that is
     // how we set things up in ReadImageInformation() above
     Nrrd *       ntmp = nrrdNew();
     unsigned int axmap[NRRD_DIM_MAX];
-    axmap[0] = rangeAxisIdx[0];
+    axmap[0] = rangeAxisIndex;
     for (unsigned int axi = 1; axi < nrrd->dim; ++axi)
     {
-      axmap[axi] = axi - (axi <= rangeAxisIdx[0]);
+      axmap[axi] = axi - (axi <= rangeAxisIndex);
     }
     // The memory size of the input and output of nrrdAxesPermute is
     // the same; the existing nrrd->data is re-used.
@@ -892,14 +929,28 @@ NrrdImageIO::Write(const void * buffer)
   NrrdIoState * nio = nrrdIoStateNew();
   int           kind[NRRD_DIM_MAX];
   size_t        size[NRRD_DIM_MAX];
-  // nrrdDim, spaceDim, and listDim contain the number of
-  // dimensions, baseDim is a dimension index.
-  unsigned int  nrrdDim, baseDim, spaceDim, listDim;
+  // nrrdDim and spaceDim contain the number of dimensions,
+  // baseDim and listDim are dimension indices.
+  unsigned int  nrrdDim, spaceDim, baseDim;
+  int           listDim{-1};
   double        spaceDir[NRRD_DIM_MAX][NRRD_SPACE_DIM_MAX];
   double        origin[NRRD_DIM_MAX];
 
-  spaceDim = 3; // Always three spatial dimensions
-  listDim = this->GetNumberOfDimensions() - spaceDim;
+  // Get the kinds dimension to see if there is a list dimension
+  MetaDataDictionary &thisDic = this->GetMetaDataDictionary();
+  std::string kindValue;
+  for (unsigned int axi = 0; axi < this->GetNumberOfDimensions(); ++axi)
+  {
+    std::string key = std::string(KEY_PREFIX) + airEnumStr(nrrdField, nrrdField_kinds) + "[" + std::to_string(axi) + "]";
+    ExposeMetaData<std::string>(thisDic, key, kindValue);
+    if (!kindValue.compare("list"))
+    {
+      listDim = axi;
+    }
+  }
+  unsigned int numListDim = (listDim < 0 ? 0 : 1);
+
+  spaceDim = this->GetNumberOfDimensions() - numListDim;
 
   if (this->GetNumberOfComponents() > 1)
   {
@@ -943,11 +994,15 @@ NrrdImageIO::Write(const void * buffer)
   {
     baseDim = 0;
   }
-  nrrdDim = baseDim + spaceDim + listDim;
+  nrrdDim = baseDim + spaceDim + numListDim;
   std::vector<double> spaceDirStd(spaceDim);
   unsigned int        axi;
-  for (axi = 0; axi < spaceDim; ++axi)
+  for (axi = 0; axi < spaceDim + numListDim; ++axi)
   {
+    if (axi == listDim)
+    {
+      continue;
+    }
     size[axi + baseDim] = this->GetDimensions(axi);
     kind[axi + baseDim] = nrrdKindDomain;
     origin[axi] = this->GetOrigin(axi);
@@ -958,14 +1013,14 @@ NrrdImageIO::Write(const void * buffer)
       spaceDir[axi + baseDim][saxi] = spacing * spaceDirStd[saxi];
     }
   }
-  // Handle list dimension
-  for (axi = spaceDim; axi < spaceDim + listDim; ++axi)
+  // Handle list dimension separately if any
+  if (numListDim > 0)
   {
-    size[axi + baseDim] = this->GetDimensions(axi);
-    kind[axi + baseDim] = nrrdKindList;
+    size[listDim + baseDim] = this->GetDimensions(listDim);
+    kind[listDim + baseDim] = nrrdKindList;
     for (unsigned int saxi = 0; saxi < spaceDim; ++saxi)
     {
-      spaceDir[axi + baseDim][saxi] = AIR_NAN;
+      spaceDir[listDim + baseDim][saxi] = AIR_NAN;
     }
   }
   if (nrrdWrap_nva(nrrd, const_cast<void *>(buffer), this->ITKToNrrdComponentType(m_ComponentType), nrrdDim, size) ||
@@ -983,7 +1038,6 @@ NrrdImageIO::Write(const void * buffer)
 
   // Go through MetaDataDictionary and set either specific nrrd field
   // or a key/value pair
-  MetaDataDictionary &                     thisDic = this->GetMetaDataDictionary();
   std::vector<std::string>                 keys = thisDic.GetKeys();
   std::vector<std::string>::const_iterator keyIt;
   const char *                             keyField, *field;
