@@ -469,7 +469,8 @@ NrrdImageIO::ReadImageInformation()
 
     double              spacing;
     double              spaceDir[NRRD_SPACE_DIM_MAX];
-    std::vector<double> spaceDirStd(domainAxisNum);
+    unsigned int itkDomainAxisNum = domainAxisNum + (rangeAxisNum > 0 ? rangeAxisNum - 1 : 0);
+    std::vector<double> spaceDirStd(itkDomainAxisNum);
     int                 spacingStatus;
 
     int iFlipFactors[3]; // used to flip the measurement frame later on
@@ -520,9 +521,9 @@ NrrdImageIO::ReadImageInformation()
             }
             this->SetSpacing(axii, spacing);
 
-            for (unsigned int saxi = 0; saxi < nrrd->spaceDim; ++saxi)
+            for (unsigned int saxi = 0; saxi < itkDomainAxisNum; ++saxi)
             {
-              spaceDirStd[saxi] = spaceDir[saxi];
+              spaceDirStd[saxi] = (saxi < nrrd->spaceDim ? spaceDir[saxi] : 0);
             }
             this->SetDirection(axii, spaceDirStd);
           }
@@ -534,6 +535,26 @@ NrrdImageIO::ReadImageInformation()
         case nrrdSpacingStatusScalarWithSpace:
           itkExceptionMacro("ReadImageInformation: Error interpreting "
                             "nrrd spacing (nrrdSpacingStatusScalarWithSpace)");
+      }
+    }
+    // If there are more non-domain axes, then handle only the first one as range axis,
+    // because ITK needs to store the rest of the dimensions as domain-like.
+    if (rangeAxisNum > 1)
+    {
+      for (unsigned int axii = 1; axii < rangeAxisNum; ++axii)
+      {
+        unsigned int naxi = rangeAxisIdx[axii];
+        unsigned int iaxi = domainAxisNum + axii - 1;
+        this->SetDimensions(iaxi, static_cast<unsigned int>(nrrd->axis[naxi].size));
+
+        // Cannot calculate spacing for this axis using nrrdSpacingCalculate,
+        // because in NRRD it is not domain kind. Set default values for axis.
+        this->SetSpacing(iaxi, 1.0);
+        for (unsigned int saxi = 0; saxi < nrrd->spaceDim + rangeAxisNum - 1; ++saxi)
+        {
+          spaceDirStd[saxi] = (saxi == iaxi ? 1.0 : 0.0);
+        }
+        this->SetDirection(iaxi, spaceDirStd);
       }
     }
 
@@ -831,7 +852,7 @@ NrrdImageIO::Read(void * buffer)
     axmap[0] = rangeAxisIndex;
     for (unsigned int axi = 1; axi < nrrd->dim; ++axi)
     {
-      axmap[axi] = axi - (axi <= rangeAxisIndex);
+      axmap[axi] = axi - (axi <= (unsigned int)rangeAxisIndex);
     }
     // The memory size of the input and output of nrrdAxesPermute is
     // the same; the existing nrrd->data is re-used.
