@@ -838,11 +838,11 @@ NrrdImageIO::Read(void * buffer)
     }
   }
 
-  if (rangeAxisIndex < 0)
+  if (rangeAxisNum > 0 && rangeAxisIndex < 0)
   {
     itkExceptionMacro("Read: handling more than one non-scalar axis not currently handled");
   }
-  if (1 == rangeAxisNum && 0 != rangeAxisIndex)
+  if (rangeAxisNum == 1 && rangeAxisIndex != 0)
   {
     // the range (dependent variable) is not on the fastest axis,
     // so we have to permute axes to put it there, since that is
